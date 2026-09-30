@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Motion Runner - PC & Mobile</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#050b14;color:#fff;font-family:Arial,"Malgun Gothic",sans-serif}
+#wrap{position:relative;width:100vw;height:100vh}
+canvas{position:absolute;inset:0;width:100%;height:100%}
+#cam{
+  position:absolute;right:24px;bottom:24px;width:260px;height:195px;
+  object-fit:cover;border-radius:16px;border:2px solid rgba(255,255,255,.35);
+  transform:scaleX(-1);background:#000;z-index:3;box-shadow:0 10px 35px #0008;
+}
+@media (max-width: 700px){
+  #hud{left:10px;right:10px;top:10px}
+  .box{padding:8px 11px;font-size:13px;border-radius:11px}
+  #status{top:55px;font-size:12px;padding:7px 11px;max-width:90%;white-space:nowrap}
+  #cam{
+    right:10px;bottom:10px;width:120px;height:160px;
+    border-radius:12px;
+  }
+  #camLabel{right:18px;bottom:174px;font-size:10px;padding:4px 7px}
+  #motion{left:10px;bottom:10px;padding:8px 10px;font-size:11px}
+  .panel{padding:24px 18px;border-radius:20px}
+  h1{font-size:29px}
+  .panel p{font-size:14px}
+  button{font-size:16px;padding:13px 20px}
+}
+@media (max-width: 420px){
+  #cam{width:105px;height:140px}
+  #camLabel{bottom:154px}
+}
+#camLabel{
+  position:absolute;right:36px;bottom:196px;z-index:4;background:#000b;
+  padding:6px 10px;border-radius:8px;font-size:12px;color:#dcecff
+}
+#hud{position:absolute;left:24px;right:24px;top:20px;z-index:4;display:flex;justify-content:space-between;pointer-events:none}
+.box{background:#0009;border:1px solid #ffffff25;border-radius:14px;padding:10px 16px;backdrop-filter:blur(8px);font-weight:bold}
+#status{position:absolute;top:78px;left:50%;transform:translateX(-50%);z-index:4;background:#0009;padding:8px 15px;border-radius:999px;font-size:14px;color:#cce6ff}
+#overlay,#gameover{
+ position:absolute;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;
+ background:linear-gradient(#06101dcc,#03070ddd);text-align:center
+}
+#gameover{display:none}
+.panel{width:min(520px,90vw);padding:34px;border-radius:24px;background:#0d1a2b;border:1px solid #ffffff20;box-shadow:0 25px 80px #0008}
+h1{font-size:38px;margin:0 0 12px}
+p{line-height:1.7;color:#c6d5e6}
+button{font-size:18px;font-weight:bold;border:0;border-radius:14px;padding:14px 28px;cursor:pointer;background:#4ade80;color:#06120a}
+button:hover{filter:brightness(1.08)}
+#help{font-size:13px;color:#8fa5bb;margin-top:16px}
+#motion{position:absolute;left:24px;bottom:24px;z-index:4;background:#0009;padding:12px 15px;border-radius:14px;font-size:13px}
+#motion b{color:#75e0ff}
+</style>
+</head>
+<body>
+<div id="wrap">
+<canvas id="game"></canvas>
+<video id="cam" autoplay playsinline muted></video>
+<div id="camLabel">WEBCAM</div>
+
+<div id="hud">
+  <div class="box">🏃 SCORE <span id="score">0</span></div>
+  <div class="box">❤️ <span id="lives">3</span></div>
+</div>
+<div id="status">웹캠을 준비하세요</div>
+<div id="motion">동작: <b id="motionText">대기</b></div>
+
+<div id="overlay">
+  <div class="panel">
+    <h1>🏃 Motion Runner</h1>
+    <p>
+      PC 또는 휴대폰 카메라로 몸의 움직임을 인식합니다.<br>
+      몸을 <b>왼쪽 / 오른쪽</b>으로 움직여 장애물을 피하고<br>
+      <b>점프</b>해서 장애물을 넘어가세요.
+    </p>
+    <button id="start">웹캠 시작</button>
+    <div id="help">
+카메라 권한을 허용한 뒤 전신이 화면에 들어오도록 서세요.<br>
+<span style="color:#75e0ff">휴대폰에서는 반드시 HTTPS 주소로 접속하세요.</span>
+</div>
+    <div id="err" style="color:#ff9b9b;margin-top:10px"></div>
+  </div>
+</div>
+
+<div id="gameover">
+  <div class="panel">
+    <h1>💥 GAME OVER</h1>
+    <p>최종 점수</p>
+    <div id="final" style="font-size:64px;font-weight:900;margin:5px 0 20px">0</div>
+    <button id="again">다시 시작</button>
+  </div>
+</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+const video=document.getElementById("cam");
+
+let W=innerWidth,H=innerHeight,DPR=1;
+function resize(){
+  W=innerWidth;H=innerHeight;DPR=Math.min(devicePixelRatio||1,2);
+  canvas.width=W*DPR;canvas.height=H*DPR;
+  canvas.style.width=W+"px";canvas.style.height=H+"px";
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+addEventListener("resize",resize);resize();
+
+const scoreEl=document.getElementById("score");
+const livesEl=document.getElementById("lives");
+const statusEl=document.getElementById("status");
+const motionEl=document.getElementById("motionText");
+
+let stream=null, pose=null;
+let running=false, webcamReady=false;
+let score=0,lives=3,speed=.00046,spawnTimer=0;
+let last=performance.now();
+let obstacles=[];
+let player={x:.5,y:0,vy:0,jump:false};
+let targetX=.5;
+let smoothX=.5;
+let jumpLock=0,hitLock=0;
+let previousHipY=null,previousShoulderY=null;
+let lastPoseTime=0;
+
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+
+function drawScene(){
+  const sky=ctx.createLinearGradient(0,0,0,H);
+  sky.addColorStop(0,"#061324");
+  sky.addColorStop(.55,"#102d48");
+  sky.addColorStop(1,"#050b14");
+  ctx.fillStyle=sky;ctx.fillRect(0,0,W,H);
+
+  // 배경 건물
+  ctx.fillStyle="#0b1c2d";
+  for(let i=0;i<13;i++){
+    const bw=W/16;
+    const bh=35+(i*37)%150;
+    ctx.fillRect(i*bw,H*.38-bh,bw-3,bh);
+  }
+
+  // 도로
+  ctx.beginPath();
+  ctx.moveTo(W*.45,H*.38);
+  ctx.lineTo(W*.55,H*.38);
+  ctx.lineTo(W*.98,H);
+  ctx.lineTo(W*.02,H);
+  ctx.closePath();
+  ctx.fillStyle="#17293b";ctx.fill();
+
+  // 도로 중앙선
+  ctx.strokeStyle="#ffffff20";ctx.lineWidth=4;
+  for(const lane of [-.16,.16]){
+    ctx.beginPath();
+    ctx.moveTo(W/2+lane*W*.45,H*.38);
+    ctx.lineTo(W/2+lane*W*1.9,H);
+    ctx.stroke();
+  }
+
+  // 중앙 원근선
+  ctx.strokeStyle="#ffffff12";
+  ctx.beginPath();ctx.moveTo(W/2,H*.38);ctx.lineTo(W/2,H);ctx.stroke();
+}
+
+function projectX(x,z){
+  return W/2+(x-.5)*W*(.35+z*1.05);
+}
+function projectY(z){return H*.40+z*H*.48;}
+
+function drawObstacle(o){
+  const x=projectX(o.x,o.z);
+  const y=projectY(o.z);
+  const s=.35+o.z*1.35;
+  const w=o.type==="low"?.22:.15;
+  const h=o.type==="low"?.10:.19;
+  const px=w*W*s, py=h*H*s;
+
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.shadowBlur=22;
+  ctx.shadowColor=o.type==="low"?"#f59e0b":"#ef4444";
+  ctx.fillStyle=o.type==="low"?"#f59e0b":"#ef4444";
+  if(o.type==="low"){
+    ctx.fillRect(-px/2,-py,px,py);
+    ctx.fillStyle="#fff5";
+    ctx.fillRect(-px*.35,-py*.75,px*.7,py*.12);
+  }else{
+    ctx.fillRect(-px/2,-py,px,py);
+    ctx.fillStyle="#fff5";
+    ctx.fillRect(-px*.32,-py*.78,px*.64,py*.12);
+  }
+  ctx.restore();
+}
+
+function drawPlayer(){
+  const x=W/2+(player.x-.5)*W*.42;
+  const ground=H*.84;
+  const y=ground-player.y*H*.30;
+  const s=Math.min(W,H)/600;
+
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.scale(s,s);
+
+  ctx.fillStyle="#0007";
+  ctx.beginPath();ctx.ellipse(0,8,38,9,0,0,Math.PI*2);ctx.fill();
+
+  ctx.fillStyle="#60a5fa";
+  ctx.beginPath();ctx.arc(0,-70,21,0,Math.PI*2);ctx.fill();
+  ctx.fillRect(-17,-49,34,56);
+
+  ctx.fillStyle="#93c5fd";
+  ctx.fillRect(-34,-42,17,49);
+  ctx.fillRect(17,-42,17,49);
+
+  ctx.fillStyle="#60a5fa";
+  ctx.fillRect(-20,7,16,57);
+  ctx.fillRect(4,7,16,57);
+
+  ctx.restore();
+}
+
+function spawn(){
+  const lane=[.25,.5,.75][Math.floor(Math.random()*3)];
+  obstacles.push({
+    x:lane,z:0,
+    type:Math.random()<.38?"low":"block",
+    hit:false
+  });
+}
+
+function jump(){
+  if(!player.jump){
+    player.jump=true;
+    player.vy=.020;
+    motionEl.textContent="점프!";
+  }
+}
+
+function update(dt){
+  const f=dt/16.67;
+
+  // 부드러운 좌우 이동
+  player.x += (targetX-player.x)*Math.min(.16*f,.65);
+
+  if(player.jump){
+    player.y+=player.vy*f;
+    player.vy-=.00118*f;
+    if(player.y<=0){
+      player.y=0;player.vy=0;player.jump=false;
+    }
+  }
+
+  jumpLock=Math.max(0,jumpLock-dt);
+  hitLock=Math.max(0,hitLock-dt);
+
+  speed+=dt*.000000018;
+  spawnTimer-=dt;
+  if(spawnTimer<=0){
+    spawn();
+    spawnTimer=Math.max(650,1050-speed*500000);
+  }
+
+  for(const o of obstacles)o.z+=speed*dt;
+
+  for(const o of obstacles){
+    if(o.hit||hitLock>0||o.z<.80)continue;
+    const near=Math.abs(o.x-player.x)<.12;
+    if(!near)continue;
+
+    // 낮은 장애물은 점프해야 피함
+    if(o.type==="low"){
+      if(player.y<.14){
+        o.hit=true;damage();
+      }
+    }else{
+      // 블록은 충분히 점프했을 때만 회피
+      if(player.y<.17){
+        o.hit=true;damage();
+      }
+    }
+  }
+
+  obstacles=obstacles.filter(o=>o.z<1.25&&!o.hit);
+  score+=dt*.011;
+  scoreEl.textContent=Math.floor(score);
+}
+
+function damage(){
+  lives--;
+  livesEl.textContent=lives;
+  hitLock=900;
+  if(navigator.vibrate)navigator.vibrate(100);
+  if(lives<=0){
+    running=false;
+    document.getElementById("final").textContent=Math.floor(score);
+    document.getElementById("gameover").style.display="flex";
+  }
+}
+
+function loop(now){
+  if(!running)return;
+  const dt=Math.min(45,now-last);last=now;
+  update(dt);
+  drawScene();
+  obstacles.sort((a,b)=>a.z-b.z);
+  obstacles.forEach(drawObstacle);
+  drawPlayer();
+  requestAnimationFrame(loop);
+}
+
+// --------------------
+// MediaPipe Pose
+// --------------------
+function setupPose(){
+  pose=new Pose({
+    locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+  });
+
+  pose.setOptions({
+    modelComplexity:1,
+    smoothLandmarks:true,
+    enableSegmentation:false,
+    minDetectionConfidence:.60,
+    minTrackingConfidence:.60
+  });
+
+  pose.onResults(results=>{
+    if(!results.poseLandmarks){
+      motionEl.textContent="사람을 찾는 중";
+      return;
+    }
+
+    const p=results.poseLandmarks;
+    const ls=p[11],rs=p[12],lh=p[23],rh=p[24];
+    if(!ls||!rs||!lh||!rh)return;
+
+    lastPoseTime=performance.now();
+
+    // 몸통 중심을 이용해 좌우 위치 계산
+    const centerX=(ls.x+rs.x+lh.x+rh.x)/4;
+    // 웹캠 영상은 좌우 반전해서 보여주므로 게임 좌표도 반전
+    const x=1-centerX;
+
+    // 너무 작은 움직임은 무시하고 안정적으로 필터링
+    const dead=.035;
+    if(Math.abs(x-.5)<dead){
+      targetX=.5;
+    }else{
+      targetX=clamp(x,.12,.88);
+    }
+
+    smoothX += (targetX-smoothX)*.12;
+    targetX=smoothX;
+
+    // 점프 감지:
+    // 발목이 갑자기 위로 이동하거나 엉덩이/어깨가 동시에 위로 움직이면 점프
+    const ankleY=((p[27]?.y||.5)+(p[28]?.y||.5))/2;
+    const hipY=(lh.y+rh.y)/2;
+    const shoulderY=(ls.y+rs.y)/2;
+
+    if(previousHipY!==null && previousShoulderY!==null && jumpLock<=0){
+      const hipUp=previousHipY-hipY;
+      const shoulderUp=previousShoulderY-shoulderY;
+      const ankleUp=(window.prevAnkleY??ankleY)-ankleY;
+
+      if((ankleUp>.035 || (hipUp>.018&&shoulderUp>.012))){
+        jump();
+        jumpLock=700;
+      }
+    }
+
+    previousHipY=hipY;
+    previousShoulderY=shoulderY;
+    window.prevAnkleY=ankleY;
+
+    const percent=Math.round(targetX*100);
+    motionEl.textContent=`좌우 ${percent}%`;
+  });
+}
+
+async function startCamera(){
+  const err=document.getElementById("err");
+  err.textContent="";
+  statusEl.textContent="웹캠 권한 요청 중...";
+
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    err.textContent="이 브라우저에서는 웹캠을 사용할 수 없습니다.";
+    return;
+  }
+
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({
+      video:{
+        width:{ideal:1280,min:320},
+        height:{ideal:720,min:240},
+        facingMode:"user"
+      },
+      audio:false
+    });
+
+    video.srcObject=stream;
+    await video.play();
+
+    setupPose();
+
+    // requestAnimationFrame 방식으로 웹캠 프레임을 직접 전송
+    async function sendFrames(){
+      if(video.readyState>=2 && pose){
+        try{await pose.send({image:video});}catch(e){}
+      }
+      if(webcamReady)requestAnimationFrame(sendFrames);
+    }
+
+    webcamReady=true;
+    sendFrames();
+
+    statusEl.textContent="웹캠 연결 완료 — 전신이 보이게 서세요";
+    document.getElementById("start").textContent="게임 시작";
+  }catch(e){
+    console.error(e);
+    statusEl.textContent="웹캠을 열 수 없습니다";
+    err.innerHTML="브라우저의 카메라 권한을 허용해주세요.<br>휴대폰에서는 HTTPS 웹페이지에서 접속해야 카메라가 정상적으로 열립니다.";
+  }
+}
+
+document.getElementById("start").onclick=async()=>{
+  if(!webcamReady){
+    await startCamera();
+    return;
+  }
+
+  document.getElementById("overlay").style.display="none";
+  reset();
+};
+
+function reset(){
+  running=true;
+  score=0;lives=3;speed=.00046;spawnTimer=500;
+  obstacles=[];
+  player={x:.5,y:0,vy:0,jump:false};
+  targetX=.5;smoothX=.5;
+  jumpLock=0;hitLock=0;
+  previousHipY=null;previousShoulderY=null;
+  scoreEl.textContent="0";livesEl.textContent="3";
+  last=performance.now();
+  requestAnimationFrame(loop);
+}
+
+document.getElementById("again").onclick=()=>{
+  document.getElementById("gameover").style.display="none";
+  reset();
+};
+
+// PC 키보드 테스트용
+addEventListener("keydown",e=>{
+  if(e.key==="ArrowLeft")targetX=clamp(targetX-.12,.12,.88);
+  if(e.key==="ArrowRight")targetX=clamp(targetX+.12,.12,.88);
+  if(e.key==="ArrowUp"||e.key===" ")jump();
+});
+
+// 휴대폰 터치 테스트용: 좌우 스와이프/탭으로도 플레이 가능
+let touchStartX=null, touchStartY=null;
+addEventListener("touchstart",e=>{
+  if(!e.touches.length)return;
+  touchStartX=e.touches[0].clientX;
+  touchStartY=e.touches[0].clientY;
+},{passive:true});
+addEventListener("touchend",e=>{
+  if(touchStartX===null||!e.changedTouches.length)return;
+  const x=e.changedTouches[0].clientX;
+  const y=e.changedTouches[0].clientY;
+  const dx=x-touchStartX, dy=y-touchStartY;
+  if(Math.abs(dx)>45 && Math.abs(dx)>Math.abs(dy)){
+    targetX=clamp(targetX+(dx>0?.16:-.16),.12,.88);
+  }else if(Math.abs(dy)>45 && dy<0){
+    jump();
+  }else if(Math.abs(dx)<20 && Math.abs(dy)<20){
+    jump();
+  }
+  touchStartX=null;touchStartY=null;
+},{passive:true});
+
+drawScene();
+</script>
+</body>
+</html>
